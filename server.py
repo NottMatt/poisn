@@ -7,12 +7,16 @@ SPDX-License-Identifier: BSD-2-Clause
 '''
 
 import argparse
+import json
 import pathlib
-import socket
 import queue
+import socket
 import threading
 
 connections = {}
+connections_lock = threading.Lock()
+config = {}
+history = []
 
 def main():
     parser = argparse.ArgumentParser(
@@ -21,7 +25,12 @@ def main():
             help='config file',
             metavar='PATH',
             type=pathlib.Path,
-            default='config')
+            default='config.json')
+    parser.add_argument('--history',
+            help='chat log/history file',
+            metavar='PATH',
+            type=pathlib.Path,
+            default='history.json')
     parser.add_argument('-p', '--port',
             type=int,
             default=5555,
@@ -31,21 +40,23 @@ def main():
             default=None,
             help='max number of client connections allowed')
     parser.add_argument('-q', '--queue-depth',
-            metavar='N',
+            metavar='QUEUE_DEPTH',
             type=int,
             default=10,
             help='depth of queue for clients attempting connection')
-    parser.add_argument('--select-timeout',
-            metavar='S',
-            type=int,
-            default=10)
     parser.add_argument('--recv-buf-size',
-            metavar='N',
+            metavar='BUF_SIZE',
             type=int,
             default=2048,
             help='how many bytes each connection should recv at a time')
     args = parser.parse_args()
     print(args)
+
+    # Populate history and config variables from file
+    config = json_loader(args.config)
+    with open(args.history) as history_file:
+        for line in history_file.readlines():
+            history.append(json.loads(line))
 
     master_queue = queue.Queue()
     sock = socket.socket()
@@ -56,39 +67,77 @@ def main():
         sock.bind((host, port))
     except socket.error as e:
         print(str(e))
+        exit(1)
 
     print('listening')
     sock.listen(args.queue_depth)
 
-    master_queue_handler_thread = threading.Thread(target=master_queue_handler, args=(master_queue, True))
+    # Create master queue handler to pass data out to each connected client
+    master_queue_handler_thread = threading.Thread(target=master_queue_handler,
+            args=(history, True))
     master_queue_handler_thread.start()
 
     while True:
-        # Accept a client
-        client, address = sock.accept()
-        print('Connected to: ' + address[0] + ':' + str(address[1]))
+        try:
+            # Accept a client
+            client, address = sock.accept()
+            print('Connected to: ' + address[0] + ':' + str(address[1]))
 
-        # Create a thread to handle input from that socket
-        in_thread = threading.Thread(target=sock_input,
-                args=(args, client, master_queue))
+            authentication_thread = threading.Thread(
+                    target=authentication_handler,
+                    args=(args, client))
+            authentication_thread.start()
 
-        # Create a thread to relay data out to the client
-        thread_buffer = queue.Queue()
-        out_thread = threading.Thread(target=sock_output,
-                args=(client, thread_buffer))
-
-        # Keep track of the thread and its buffer
-        connections[get_socket_id(client)] = { 'out_buffer': thread_buffer }
-        in_thread.start()
-        out_thread.start()
+        except KeyboardInterrupt:
+            print("\033[32mINFO:\033[0m Shutting down")
+            exit(0)
 
     exit(0)
 
+def authentication_handler(args, client):
+
+    # Get username
+    client.sendall("Username: ".encode())
+    username = client.recv(args.recv_buf_size).decode('utf-8', 'replace').strip()
+
+    # Get user device/host so we can keep track of what to send to which
+    # device/connection
+    client.sendall("Host: ".encode())
+    host = client.recv(args.recv_buf_size).decode('utf-8', 'replace').strip()
+
+    print("{}@{}".format(username, host))
+    # Create a thread to handle input from that socket
+    in_thread = threading.Thread(target=sock_input,
+            args=(args, client, history))
+
+    # Create a thread to relay data out to the client
+    thread_buffer = queue.Queue()
+    out_thread = threading.Thread(target=sock_output,
+            args=(client, thread_buffer))
+    # Acquire lock so that we don't change the size of connections out
+    # from under an iterator
+    connections_lock.acquire()
+    # Keep track of the thread and its buffer
+    connections[get_socket_id(client)] = {
+            'username': username,
+            'host': host,
+            'out_buffer': thread_buffer,
+            'last-message': 0}
+    connections_lock.release()
+    in_thread.start()
+    out_thread.start()
+
 def master_queue_handler(buffer, a):
     while True:
-        sender, data = buffer.get()
-        for connection_id in connections.keys() - [sender]:
-            connections[connection_id]['out_buffer'].put(data)
+        # Acquire lock on connections so that it won't change size while we
+        # iterate through it
+        connections_lock.acquire()
+        for connection_id in connections.keys():
+            last_message = len(history)
+            for message in history[connections[connection_id]['last-message']:last_message]:
+                connections[connection_id]['out_buffer'].put(message['data'].encode())
+            connections[connection_id]['last-message'] = last_message
+        connections_lock.release()
 
 
 def sock_input(args, connection, buffer):
@@ -105,16 +154,26 @@ def sock_input(args, connection, buffer):
         # There was data received, so process it and enqueue it in the master
         # queue
         else:
+            cleaned_data = data.decode('utf-8', 'replace').strip()
             print("\033[1m{}:\033[0m {}".format(get_socket_id(connection),
-                data.decode('utf-8', 'replace')))
-            buffer.put((get_socket_id(connection), data))
+                cleaned_data))
+            message_package = {'sender': get_socket_id(connection),
+                    'data': cleaned_data}
+            buffer.append(message_package)
+            with open(args.history, 'a') as history_file:
+                history_file.write("{}\n".format(json.dumps(message_package)))
+    # Remove this socket from the list of connections, as it's no longer
+    # connected.
     if get_socket_id(connection) in connections.keys():
+        connections_lock.acquire()
         connections.pop(get_socket_id(connection))
+        connections_lock.release()
     print("exiting sock_input")
 
 def sock_output(connection, buffer):
     print("entering sock_output")
     connected = True
+    # push data from inbox queue through this socket
     while connected:
         try:
             connection.sendall(buffer.get())
@@ -126,9 +185,28 @@ def sock_output(connection, buffer):
     print("exiting sock_output")
 
 def get_socket_id(socket):
+    '''
+    Generates a unique identifier from a socket's qualities
+    '''
     socket_id = "{}:{}".format(socket.getpeername()[0],
             socket.getpeername()[1])
     return socket_id
+
+def json_loader(path):
+    '''
+    Loads a json file into a variable and handles expected errors
+    '''
+    try:
+        with open(path) as json_file:
+            variable = json.loads(json_file.read())
+            print(variable)
+            return variable
+    except FileNotFoundError:
+        print("\033[31mERROR:\033[0m {} not found".format(path))
+        exit(1)
+    except json.decoder.JSONDecodeError:
+        print("\033[31mERROR:\033[0m {} not valid json".format(path))
+        exit(1)
 
 # server config
 # -> port
