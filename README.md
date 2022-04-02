@@ -6,7 +6,8 @@ Allowing for custom frontend UI and cross-application data streaming.
 ### Stock Client:
 * 
 ### Miasma Client:
-* Tkinter for Python
+* Tkinter
+* Ctypes.windll
 
 <br>
 
