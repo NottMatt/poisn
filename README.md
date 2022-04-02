@@ -9,7 +9,7 @@ Allowing for custom frontend UI and cross-application data streaming.
 ### Miasma Client:
 * Tkinter
 
-### DartFrog
+### DartFrog Client
 * 
 
 <br>
@@ -21,6 +21,5 @@ Dylan Rainey - drainey19@georgefox.edu<br>
 Luke Gantar - lgantar19@georgefox.edu<br>
 
 ## Licensing
-Copyright (c) 2022, the POISN developers.
-
+Copyright (c) 2022, the POISN developers.<br>
 SPDX-License-Identifier: BSD-2-Clause
