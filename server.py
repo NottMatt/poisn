@@ -1,6 +1,15 @@
 #!/bin/python3
+'''
+Copyright (c) 2022, Kevin Lockwood <kevin-b-lockwood@gmail.com>
+Copyright (c) 2022, the POISN developers.
+
+SPDX-License-Identifier: BSD-2-Clause
+'''
+
 import argparse
+import asyncio
 import pathlib
+import socket
 
 def main():
     parser = argparse.ArgumentParser(

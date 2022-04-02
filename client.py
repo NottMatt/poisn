@@ -1,4 +1,9 @@
 #!/bin/python3
+'''
+Copyright (c) 2022, the POISN developers.
+
+SPDX-License-Identifier: BSD-2-Clause
+'''
 
 # IDEA 1
 # init terminal
