@@ -27,8 +27,7 @@ def main():
             type=pathlib.Path,
             default='config.json')
     parser.add_argument('--history',
-            help='chat log/history file',
-            metavar='PATH',
+            help='chat log/history file', metavar='PATH',
             type=pathlib.Path,
             default='history.json')
     parser.add_argument('-p', '--port',
@@ -74,7 +73,7 @@ def main():
 
     # Create master queue handler to pass data out to each connected client
     master_queue_handler_thread = threading.Thread(target=master_queue_handler,
-            args=(history, True))
+            args=(history, config))
     master_queue_handler_thread.start()
 
     while True:
@@ -85,20 +84,26 @@ def main():
 
             authentication_thread = threading.Thread(
                     target=authentication_handler,
-                    args=(args, client))
+                    args=(args, client, config, history))
             authentication_thread.start()
 
         except KeyboardInterrupt:
+            print(config)
+            with open(args.config, "w") as config_file:
+                config_file.write(json.dumps(config))
             print("\033[32mINFO:\033[0m Shutting down")
             exit(0)
 
     exit(0)
 
-def authentication_handler(args, client):
+def authentication_handler(args, client, config, history):
 
     # Get username
     client.sendall("Username: ".encode())
     username = client.recv(args.recv_buf_size).decode('utf-8', 'replace').strip()
+    client.sendall("Password: \033[28m".encode())
+    password = client.recv(args.recv_buf_size).decode('utf-8', 'replace').strip()
+    client.sendall("\033[0m".encode())
 
     # Get user device/host so we can keep track of what to send to which
     # device/connection
@@ -118,33 +123,57 @@ def authentication_handler(args, client):
     # from under an iterator
     connections_lock.acquire()
     # Keep track of the thread and its buffer
+    last_message = 0
+    print(f'config: {config}')
+    if username in config['clients']:
+        if host in config['clients'][username]:
+            if 'last-message' in config['clients'][username][host]:
+                if len(history) > config['clients'][username][host]['last-message']:
+                    last_message = config['clients'][username][host]['last-message']
+                else:
+                    last_message = 0
+            else:
+                config['clients'][username][host]['last-message'] = 0
+        else:
+            config['clients'][username][host] = {'last-message': 0}
+    else:
+        config['clients'][username] = {host: {'last-message': 0}}
+
+
     connections[get_socket_id(client)] = {
             'username': username,
             'host': host,
             'out_buffer': thread_buffer,
-            'last-message': 0}
+            'last-message': last_message}
     connections_lock.release()
     # Start the producer and consumer
     in_thread.start()
     out_thread.start()
 
-def master_queue_handler(buffer, a):
+def master_queue_handler(buffer, config):
     while True:
         # Acquire lock on connections so that it won't change size while we
         # iterate through it
         connections_lock.acquire()
         for connection_id in connections.keys():
+            # Get the index of the most recent message
             last_message = len(history)
+            connection_data = connections[connection_id]
+
+            # Send this client every message between the last one it saw and
+            # the most recent message the server received
             for message in history[connections[connection_id]['last-message']:last_message]:
 
                 # If this message was sent by the current client, don't send it
                 # back to them, that would be silly
-                if message['sender'] != connection_id:
+                if not (message['sender'] == connection_data['username']
+                        and message['host'] == connection_data['host']):
                     connections[connection_id]['out_buffer'].put(
                             "{}\n".format(message['data']).encode())
 
             # Update last seen message for this client
             connections[connection_id]['last-message'] = last_message
+            config['clients'][connection_data['username']][connection_data['host']]['last-message'] = last_message
         connections_lock.release()
 
 
@@ -162,12 +191,18 @@ def sock_input(args, connection, buffer):
         # There was data received, so process it and enqueue it in the master
         # queue
         else:
+            connection_data = connections[get_socket_id(connection)]
             cleaned_data = data.decode('utf-8', 'replace').strip()
-            print("\033[1m{}:\033[0m {}".format(get_socket_id(connection),
-                cleaned_data))
-            message_package = {'sender': get_socket_id(connection),
+            print("\033[1m{}@{}:\033[0m {}".format(connection_data['username'],
+                connection_data['host'], cleaned_data))
+            message_package = {'sender': connection_data['username'],
+                    'host': connection_data['host'],
                     'data': cleaned_data}
             buffer.append(message_package)
+
+            # Assume that the client has echo checked it in the file to avoid
+            # the eventuality of a message_id being duplicated in the future
+            # causing collisions and messages disappearing
             with open(args.history, 'a') as history_file:
                 history_file.write("{}\n".format(json.dumps(message_package)))
     # Remove this socket from the list of connections, as it's no longer
