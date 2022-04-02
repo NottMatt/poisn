@@ -6,9 +6,11 @@ Copyright (c) 2022, the POISN developers.
 SPDX-License-Identifier: BSD-2-Clause
 '''
 
-from ctypes import windll
 from tkinter import *
 from socket import *
+import queue
+import threading
+import subprocess
 
 
 def main():
@@ -17,9 +19,9 @@ def main():
 
     inp_text = (inp_field.get(1.0, 'end'))[1:-1]
     flag = False
-    if ('\n' in inp_text and len(inp_text) > 1):
+    if '\n' in inp_text and len(inp_text) > 1:
         message = inp_field.get(1.0, 'end')[0:-1]
-        print(message)
+        outbuffer.put(message)
         inp_field.delete(1.0, 'end')
         buf = open('buffer', 'a')
         buf.write(message)
@@ -29,7 +31,31 @@ def main():
             node_update = True
     root.after(1, main)
 
-    # TCP stuff
+    # inbuffer
+    if not inbuffer.empty():
+        tcp_message = inbuffer.get()
+        data = tcp_message
+        last_f = open('last', 'w')
+        last_f.write(data)
+        last_f.close()
+        execute_py()
+        # header = ''
+        # data = ''
+        # if len(tcp_message) > 0:
+        #     content = tcp_message.split('\n', 1)
+        #     if len(content) > 1:
+        #         header = content[0]
+        #         data = content[1]
+
+        # data processing
+
+        flag=True
+        buf_in = open('buffer', 'a')
+        buf_in.write(data)
+        buf_in.close()
+
+
+
 
     # Node update
     if node_update:
@@ -60,30 +86,72 @@ def main():
         flag = False
     buf.close()
 
+def execute_py():
+    py = subprocess.Popen("./code_file.py", stdout=subprocess.PIPE, shell=True)
+    (output, err) = py.communicate()
+    if (len(output) > 0):
+        outbuffer.put(output)
+        b_field.config(state=NORMAL)
+        b_field.delete(1.0, 'end')
+        b_field.insert('end', output)
+        b_field.config(state=DISABLED)
+
+    a_button.config(bg='#333333')
+    globals()['code_active'] = False
+
+
+def socket_in(in_buffer, is_connected):
+    while is_connected:
+        # TCP read
+        tcp_message = str(conn.recv(2048).decode())
+        if not tcp_message:
+            is_connected = False
+        else:
+            in_buffer.put(tcp_message)
+
+        print(tcp_message)
+
+
+def socket_out(out_buffer, is_connected):
+    while is_connected:
+        out_msg = out_buffer.get()
+        conn.sendall(out_msg.encode())
+
 
 def activate():
     print('activate')
     # get content from textbox
     a_code = t_field.get(1.0, 'end')
     a_file = open('code_file.py', 'w')
-    a_file.write(a_code)
+    a_file.write("#!/bin/python3\n" + a_code)
     a_file.close()
     a_button.config(bg='#89402e')
+    globals()['code_active'] = True
 
 
 try:
     # print('')
     username = 'nottmatt'
-    windll.shcore.SetProcessDpiAwareness(1)
 
     # TCP connection
 
     IP = '10.55.10.147'
     PORT = 5555
-    conn = socket(socket.AF_INET, socket.SOCK_STREAM)
+    conn = socket(AF_INET, SOCK_STREAM)
     conn.connect((IP, PORT))
-
     print('Connected')
+    connected = True
+
+    outbuffer = queue.Queue()
+    inbuffer = queue.Queue()
+
+    sock_t_in = threading.Thread(target=socket_in, args=(inbuffer, connected))
+    sock_t_out = threading.Thread(target=socket_out, args=(outbuffer, connected))
+    sock_t_out.start()
+    sock_t_in.start()
+
+    code_active = False
+
 finally:
 
     # initialize window
@@ -186,3 +254,4 @@ finally:
     buf = open('buffer', 'w')
     buf.write('')
     buf.close()
+    exit()
