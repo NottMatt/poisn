@@ -88,10 +88,11 @@ def main():
             authentication_thread.start()
 
         except KeyboardInterrupt:
+            print("\033[32mINFO:\033[0m Shutting down")
             print(config)
             with open(args.config, "w") as config_file:
-                config_file.write(json.dumps(config))
-            print("\033[32mINFO:\033[0m Shutting down")
+                config_file.write(json.dumps(config, indent=4))
+            print("\033[32mINFO:\033[0m Safe to kill")
             exit(0)
 
     exit(0)
@@ -99,11 +100,19 @@ def main():
 def authentication_handler(args, client, config, history):
 
     # Get username
-    client.sendall("Username: ".encode())
-    username = client.recv(args.recv_buf_size).decode('utf-8', 'replace').strip()
-    client.sendall("Password: \033[28m".encode())
-    password = client.recv(args.recv_buf_size).decode('utf-8', 'replace').strip()
-    client.sendall("\033[0m".encode())
+    try:
+        client.sendall("Username: ".encode())
+        username = client.recv(args.recv_buf_size).decode('utf-8', 'replace').strip()
+        client.sendall("Password: \033[28m".encode())
+        password = client.recv(args.recv_buf_size).decode('utf-8', 'replace').strip()
+        client.sendall("\033[0m".encode())
+        client.send('\033[A'.encode())
+        client.send('Password: '.encode())
+        for i in range(0, len(password)):
+            client.send(' '.encode())
+        client.send('\n'.encode())
+    except ConnectionResetError:
+        return
 
     # Get user device/host so we can keep track of what to send to which
     # device/connection
@@ -128,10 +137,11 @@ def authentication_handler(args, client, config, history):
     if username in config['clients']:
         if host in config['clients'][username]:
             if 'last-message' in config['clients'][username][host]:
-                if len(history) > config['clients'][username][host]['last-message']:
+                if len(history) >= config['clients'][username][host]['last-message']:
                     last_message = config['clients'][username][host]['last-message']
                 else:
                     last_message = 0
+                print(last_message)
             else:
                 config['clients'][username][host]['last-message'] = 0
         else:
