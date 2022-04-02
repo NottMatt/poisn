@@ -47,7 +47,7 @@ def main():
     args = parser.parse_args()
     print(args)
 
-    master_buffer = queue.Queue()
+    master_queue = queue.Queue()
     sock = socket.socket()
     host = '10.55.10.147'
     port = args.port
@@ -60,6 +60,9 @@ def main():
     print('listening')
     sock.listen(args.queue_depth)
 
+    master_queue_handler_thread = threading.Thread(target=master_queue_handler, args=(master_queue, True))
+    master_queue_handler_thread.start()
+
     while True:
         # Accept a client
         client, address = sock.accept()
@@ -67,7 +70,7 @@ def main():
 
         # Create a thread to handle input from that socket
         in_thread = threading.Thread(target=sock_input,
-                args=(args, client, master_buffer))
+                args=(args, client, master_queue))
 
         # Create a thread to relay data out to the client
         thread_buffer = queue.Queue()
@@ -81,27 +84,32 @@ def main():
 
     exit(0)
 
-def master_queue_handler(buffer):
+def master_queue_handler(buffer, a):
     while True:
-        for connection in connections:
-            sender, data = buffer.get()
+        sender, data = buffer.get()
+        for connection_id in connections.keys() - [sender]:
+            connections[connection_id]['out_buffer'].put(data)
+
 
 def sock_input(args, connection, buffer):
     print("entering sock_input")
+    connected = True
     # As long as we are connected, get input from the socket and enque it in
     # the master queue
-    while get_socket_id(connection) in connections.keys():
+    while connected:
         data = connection.recv(args.recv_buf_size)
         # If there was no received data, the connection is broken and will
         # never heal, so record that this socket is dead.
         if not data:
             connected = False;
+        # There was data received, so process it and enqueue it in the master
+        # queue
         else:
-            print("{}: {}".format(get_socket_id(connection),
+            print("\033[1m{}:\033[0m {}".format(get_socket_id(connection),
                 data.decode('utf-8', 'replace')))
             buffer.put((get_socket_id(connection), data))
     if get_socket_id(connection) in connections.keys():
-        connections.remove(get_socket_id(connection))
+        connections.pop(get_socket_id(connection))
     print("exiting sock_input")
 
 def sock_output(connection, buffer):
@@ -112,11 +120,14 @@ def sock_output(connection, buffer):
             connection.sendall(buffer.get())
         except socket.error:
             connected = False
+
+        if get_socket_id(connection) not in connections.keys():
+            connected = False
     print("exiting sock_output")
 
 def get_socket_id(socket):
-    socket_id = "{}{}".format(socket.getsockname()[0],
-            socket.getsockname()[1])
+    socket_id = "{}:{}".format(socket.getpeername()[0],
+            socket.getpeername()[1])
     return socket_id
 
 # server config
