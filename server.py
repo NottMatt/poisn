@@ -120,17 +120,29 @@ def authentication_handler(args, client, config, history):
     host = client.recv(args.recv_buf_size).decode('utf-8', 'replace').strip()
 
     print("{}@{}".format(username, host))
+    thread_buffer = queue.Queue()
+
+    connections_lock.acquire()
+    connection = {
+            'key': f'{username}@{host}:{client.getpeername()[0]}:{client.getpeername()[1]}',
+            'socket': client,
+            'username': username,
+            'ip': client.getpeername()[0],
+            'port': client.getpeername()[1],
+            'host': host,
+            'out_buffer': thread_buffer,
+            'last-message': 0}
+    connections[f'{username}@{host}:{client.getpeername()[0]}:{client.getpeername()[1]}'] = connection
+
     # Create a thread to handle input from that socket
     in_thread = threading.Thread(target=sock_input,
-            args=(args, client, history))
+            args=(args, connection, history))
 
     # Create a thread to relay data out to the client
-    thread_buffer = queue.Queue()
     out_thread = threading.Thread(target=sock_output,
-            args=(client, thread_buffer))
+            args=(connection, thread_buffer))
     # Acquire lock so that we don't change the size of connections out
     # from under an iterator
-    connections_lock.acquire()
     # Keep track of the thread and its buffer
     last_message = 0
     print(f'config: {config}')
@@ -141,7 +153,6 @@ def authentication_handler(args, client, config, history):
                     last_message = config['clients'][username][host]['last-message']
                 else:
                     last_message = 0
-                print(last_message)
             else:
                 config['clients'][username][host]['last-message'] = 0
         else:
@@ -149,12 +160,6 @@ def authentication_handler(args, client, config, history):
     else:
         config['clients'][username] = {host: {'last-message': 0}}
 
-
-    connections[get_socket_id(client)] = {
-            'username': username,
-            'host': host,
-            'out_buffer': thread_buffer,
-            'last-message': last_message}
     connections_lock.release()
     # Start the producer and consumer
     in_thread.start()
@@ -165,25 +170,25 @@ def master_queue_handler(buffer, config):
         # Acquire lock on connections so that it won't change size while we
         # iterate through it
         connections_lock.acquire()
-        for connection_id in connections.keys():
+        for connection in connections.values():
             # Get the index of the most recent message
             last_message = len(history)
-            connection_data = connections[connection_id]
 
             # Send this client every message between the last one it saw and
             # the most recent message the server received
-            for message in history[connections[connection_id]['last-message']:last_message]:
+            last_read_message = config['clients'][connection['username']][connection['host']]['last-message']
+            for message in history[last_read_message:last_message]:
 
                 # If this message was sent by the current client, don't send it
                 # back to them, that would be silly
-                if not (message['sender'] == connection_data['username']
-                        and message['host'] == connection_data['host']):
-                    connections[connection_id]['out_buffer'].put(
+                if not (message['sender'] == connection['username']
+                        and message['host'] == connection['host']):
+                    connection['out_buffer'].put(
                             "{}\n".format(message['data']).encode())
 
             # Update last seen message for this client
-            connections[connection_id]['last-message'] = last_message
-            config['clients'][connection_data['username']][connection_data['host']]['last-message'] = last_message
+            connection['last-message'] = last_message
+            config['clients'][connection['username']][connection['host']]['last-message'] = last_message
         connections_lock.release()
 
 
@@ -193,33 +198,35 @@ def sock_input(args, connection, buffer):
     # As long as we are connected, get input from the socket and enque it in
     # the master queue
     while connected:
-        data = connection.recv(args.recv_buf_size)
-        # If there was no received data, the connection is broken and will
-        # never heal, so record that this socket is dead.
-        if not data:
-            connected = False;
-        # There was data received, so process it and enqueue it in the master
-        # queue
-        else:
-            connection_data = connections[get_socket_id(connection)]
-            cleaned_data = data.decode('utf-8', 'replace').strip()
-            print("\033[1m{}@{}:\033[0m {}".format(connection_data['username'],
-                connection_data['host'], cleaned_data))
-            message_package = {'sender': connection_data['username'],
-                    'host': connection_data['host'],
-                    'data': cleaned_data}
-            buffer.append(message_package)
+        try:
+            data = connection['socket'].recv(args.recv_buf_size)
+            # If there was no received data, the connection is broken and will
+            # never heal, so record that this socket is dead.
+            if not data:
+                connected = False;
+            # There was data received, so process it and enqueue it in the master
+            # queue
+            else:
+                cleaned_data = data.decode('utf-8', 'replace').strip()
+                print("\033[1m{}@{}:\033[0m {}".format(connection['username'],
+                    connection['host'], cleaned_data))
+                message_package = {'sender': connection['username'],
+                        'host': connection['host'],
+                        'data': cleaned_data}
+                buffer.append(message_package)
 
-            # Assume that the client has echo checked it in the file to avoid
-            # the eventuality of a message_id being duplicated in the future
-            # causing collisions and messages disappearing
-            with open(args.history, 'a') as history_file:
-                history_file.write("{}\n".format(json.dumps(message_package)))
+                # Assume that the client has echo checked it in the file to avoid
+                # the eventuality of a message_id being duplicated in the future
+                # causing collisions and messages disappearing
+                with open(args.history, 'a') as history_file:
+                    history_file.write("{}\n".format(json.dumps(message_package)))
+        except (ConnectionResetError, OSError):
+            connected = False
     # Remove this socket from the list of connections, as it's no longer
     # connected.
-    if get_socket_id(connection) in connections.keys():
+    if connection in connections.keys():
         connections_lock.acquire()
-        connections.pop(get_socket_id(connection))
+        connections.pop(connection)
         connections_lock.release()
     print("exiting sock_input")
 
@@ -229,21 +236,13 @@ def sock_output(connection, buffer):
     # push data from inbox queue through this socket
     while connected:
         try:
-            connection.sendall(buffer.get())
-        except socket.error:
+            connection['socket'].sendall(buffer.get())
+        except (socket.error, OSError):
             connected = False
-
-        if get_socket_id(connection) not in connections.keys():
+        if connection['key'] not in connections:
+            print(connection['key'], connections)
             connected = False
     print("exiting sock_output")
-
-def get_socket_id(socket):
-    '''
-    Generates a unique identifier from a socket's qualities
-    '''
-    socket_id = "{}:{}".format(socket.getpeername()[0],
-            socket.getpeername()[1])
-    return socket_id
 
 def json_loader(path):
     '''
