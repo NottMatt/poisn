@@ -224,9 +224,9 @@ def sock_input(args, connection, buffer):
             connected = False
     # Remove this socket from the list of connections, as it's no longer
     # connected.
-    if connection in connections.keys():
+    if connection['key'] in connections.keys():
         connections_lock.acquire()
-        connections.pop(connection)
+        connections.pop(connection['key'])
         connections_lock.release()
     print("exiting sock_input")
 
