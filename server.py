@@ -124,6 +124,7 @@ def authentication_handler(args, client):
             'out_buffer': thread_buffer,
             'last-message': 0}
     connections_lock.release()
+    # Start the producer and consumer
     in_thread.start()
     out_thread.start()
 
@@ -135,7 +136,14 @@ def master_queue_handler(buffer, a):
         for connection_id in connections.keys():
             last_message = len(history)
             for message in history[connections[connection_id]['last-message']:last_message]:
-                connections[connection_id]['out_buffer'].put(message['data'].encode())
+
+                # If this message was sent by the current client, don't send it
+                # back to them, that would be silly
+                if message['sender'] != connection_id:
+                    connections[connection_id]['out_buffer'].put(
+                            "{}\n".format(message['data']).encode())
+
+            # Update last seen message for this client
             connections[connection_id]['last-message'] = last_message
         connections_lock.release()
 
