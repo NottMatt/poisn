@@ -9,6 +9,7 @@ Allowing for custom frontend UI and cross-application data streaming.
 * Tkinter for Python
 
 <br>
+
 ## Contributors
 Matthew Tiemersma - mtiemersma19@georgefox.edu<br>
 Kevin Lockwood - klockwood19@georgefox.edu<br>
