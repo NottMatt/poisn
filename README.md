@@ -21,3 +21,7 @@ Dylan Rainey - drainey19@georgefox.edu<br>
 Luke Gantar - lgantar19@georgefox.edu<br>
 
 ## Licensing
+Copyright (c) 2022, Matthew Tiemersma <mattdtie@gmail.com>
+Copyright (c) 2022, the POISN developers.
+
+SPDX-License-Identifier: BSD-2-Clause
