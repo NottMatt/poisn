@@ -5,9 +5,12 @@ Allowing for custom frontend UI and cross-application data streaming.
 ## Dependencies
 ### Stock Client:
 * 
+
 ### Miasma Client:
 * Tkinter
-* Ctypes.windll
+
+### DartFrog
+* 
 
 <br>
 
