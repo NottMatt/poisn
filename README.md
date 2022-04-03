@@ -42,19 +42,19 @@ that contain context-specific information.
 
 * **Host Query**
 
-        HEAD: Host_Q
+        HEAD: `Q HOST`
         <List of hosts associated with user>
 <br>
 
 * **Node Query Response**
 
-        HEAD: Node_Q
+        HEAD: `Q NODE`
         <List of active nodes>
 <br>
 
 * **History Query Response**
 
-        HEAD: Hist_Q
+        HEAD: `Q HIST`
         <List of messages since queried history index>
 <br>
 
@@ -62,19 +62,19 @@ that contain context-specific information.
 
 * **Plaintext Message**
 
-        HEAD: Relay_P
+        HEAD: `R TEXT`
         <Plaintext message>
 <br>
 
 * **Link Message**
 
-        HEAD: Relay_L
+        HEAD: `R LINK`
         <Plaintext link URL>
 <br>
 
 * **File Encoding Message**
 
-        HEAD: Relay_F filetype
+        HEAD: `R FILE <filetype>`
         <Byte encoding of file>
 
 
