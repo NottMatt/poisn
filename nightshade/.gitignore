@@ -1,2 +1,7 @@
 *.o
-nightshade
+
+CMakeFiles/*
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+NIGHTSHADE

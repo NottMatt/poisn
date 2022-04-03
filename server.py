@@ -12,45 +12,47 @@ import pathlib
 import queue
 import socket
 import threading
+import os
+import hashlib
 
 connections = {}
 connections_lock = threading.Lock()
 config = {}
 history = []
 
-def main():
-    parser = argparse.ArgumentParser(
-            description = 'Official POISN protocol server')
-    parser.add_argument('-c', '--config',
-            help='config file',
-            metavar='PATH',
-            type=pathlib.Path,
-            default='config.json')
-    parser.add_argument('--history',
-            help='chat log/history file', metavar='PATH',
-            type=pathlib.Path,
-            default='history.json')
-    parser.add_argument('-p', '--port',
-            type=int,
-            default=5555,
-            help='listening port')
-    parser.add_argument('-m', '--max-connections',
-            type=int,
-            default=None,
-            help='max number of client connections allowed')
-    parser.add_argument('-q', '--queue-depth',
-            metavar='QUEUE_DEPTH',
-            type=int,
-            default=10,
-            help='depth of queue for clients attempting connection')
-    parser.add_argument('--recv-buf-size',
-            metavar='BUF_SIZE',
-            type=int,
-            default=2048,
-            help='how many bytes each connection should recv at a time')
-    args = parser.parse_args()
-    print(args)
+parser = argparse.ArgumentParser(
+        description = 'Official POISN protocol server')
+parser.add_argument('-c', '--config',
+        help='config file',
+        metavar='PATH',
+        type=pathlib.Path,
+        default='config.json')
+parser.add_argument('--history',
+        help='chat log/history file', metavar='PATH',
+        type=pathlib.Path,
+        default='history.json')
+parser.add_argument('-p', '--port',
+        type=int,
+        default=5555,
+        help='listening port')
+parser.add_argument('-m', '--max-connections',
+        type=int,
+        default=None,
+        help='max number of client connections allowed')
+parser.add_argument('-q', '--queue-depth',
+        metavar='QUEUE_DEPTH',
+        type=int,
+        default=10,
+        help='depth of queue for clients attempting connection')
+parser.add_argument('--recv-buf-size',
+        metavar='BUF_SIZE',
+        type=int,
+        default=2048,
+        help='how many bytes each connection should recv at a time')
+args = parser.parse_args()
+print(args)
 
+def main():
     # Populate history and config variables from file
     config = json_loader(args.config)
     with open(args.history) as history_file:
@@ -97,20 +99,59 @@ def main():
 
     exit(0)
 
+def password_prompt(socket, prompt):
+    socket.sendall(f'{prompt}'.encode())
+    password = socket.recv(args.recv_buf_size).decode('utf-8', 'replace').strip()
+    socket.sendall("\033[0m".encode())
+    socket.send('\033[A'.encode())
+    socket.send(f'{prompt}'.encode())
+    for i in range(0, len(password)):
+        socket.send(' '.encode())
+    socket.send('\n'.encode())
+    return password
+
+def get_new_password(socket, username):
+    salt = os.urandom(32)
+    password_is_good = False
+    while not password_is_good:
+        password = password_prompt(socket,     'Enter New Password:  ')
+        if password == password_prompt(socket, 'Repeat New Password: '):
+            password_is_good = True
+        else:
+            socket.sendall('Passwords do not match'.encode())
+    return salt, password.encode('iso-8859-1')
+
+def get_password(config, socket, username):
+    salt = config['clients'][username]['salt'].encode('iso-8859-1')
+    password = password_prompt(socket, 'Password: ').encode('iso-8859-1')
+
+    return salt, password
+
 def authentication_handler(args, client, config, history):
 
     # Get username
     try:
         client.sendall("Username: ".encode())
         username = client.recv(args.recv_buf_size).decode('utf-8', 'replace').strip()
-        client.sendall("Password: \033[28m".encode())
-        password = client.recv(args.recv_buf_size).decode('utf-8', 'replace').strip()
-        client.sendall("\033[0m".encode())
-        client.send('\033[A'.encode())
-        client.send('Password: '.encode())
-        for i in range(0, len(password)):
-            client.send(' '.encode())
-        client.send('\n'.encode())
+
+        login = False
+        if username in config['clients']:
+            login = True
+            salt, password = get_password(config, client, username)
+        else:
+            salt, password = get_new_password(client, username)
+
+        hashed_password = hashlib.pbkdf2_hmac(
+                'sha256',
+                password,
+                salt,
+                100000).decode('iso-8859-1')
+        if login:
+            if not hashed_password == config['clients'][username]['password']:
+                client.sendall('Incorrect password'.encode())
+                client.close()
+                return
+
     except ConnectionResetError:
         return
 
@@ -148,17 +189,20 @@ def authentication_handler(args, client, config, history):
     print(f'config: {config}')
     if username in config['clients']:
         if host in config['clients'][username]:
-            if 'last-message' in config['clients'][username][host]:
-                if len(history) >= config['clients'][username][host]['last-message']:
-                    last_message = config['clients'][username][host]['last-message']
+            if 'last-message' in config['clients'][username]['hosts'][host]:
+                if len(history) >= config['clients'][username]['hosts'][host]['last-message']:
+                    last_message = config['clients'][username]['hosts'][host]['last-message']
                 else:
                     last_message = 0
             else:
-                config['clients'][username][host]['last-message'] = 0
+                config['clients'][username]['hosts'][host]['last-message'] = 0
         else:
-            config['clients'][username][host] = {'last-message': 0}
+            config['clients'][username]['hosts'][host] = {'last-message': 0}
     else:
-        config['clients'][username] = {host: {'last-message': 0}}
+        config['clients'][username] = {'hosts': {host: {'last-message': 0}}}
+
+    config['clients'][username]['salt'] = salt.decode('iso-8859-1')
+    config['clients'][username]['password'] = hashed_password
 
     connections_lock.release()
     # Start the producer and consumer
@@ -176,7 +220,7 @@ def master_queue_handler(buffer, config):
 
             # Send this client every message between the last one it saw and
             # the most recent message the server received
-            last_read_message = config['clients'][connection['username']][connection['host']]['last-message']
+            last_read_message = config['clients'][connection['username']]['hosts'][connection['host']]['last-message']
             for message in history[last_read_message:last_message]:
 
                 # If this message was sent by the current client, don't send it
@@ -188,7 +232,7 @@ def master_queue_handler(buffer, config):
 
             # Update last seen message for this client
             connection['last-message'] = last_message
-            config['clients'][connection['username']][connection['host']]['last-message'] = last_message
+            config['clients'][connection['username']]['hosts'][connection['host']]['last-message'] = last_message
         connections_lock.release()
 
 
