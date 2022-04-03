@@ -155,43 +155,24 @@ def authentication_handler(args, client, config, history):
     except ConnectionResetError:
         return
 
+    hostprompt = f'Select one of the following hosts or create a new host\n'
+    for host in config['clients'][username]['hosts']:
+        hostprompt += f'\t{host}\n'
+
     # Get user device/host so we can keep track of what to send to which
     # device/connection
-    client.sendall("Host: ".encode())
+    hostprompt += "Host: "
+    client.sendall(hostprompt.encode())
     host = client.recv(args.recv_buf_size).decode('utf-8', 'replace').strip()
 
-    print("{}@{}".format(username, host))
-    thread_buffer = queue.Queue()
 
-    connections_lock.acquire()
-    connection = {
-            'key': f'{username}@{host}:{client.getpeername()[0]}:{client.getpeername()[1]}',
-            'socket': client,
-            'username': username,
-            'ip': client.getpeername()[0],
-            'port': client.getpeername()[1],
-            'host': host,
-            'out_buffer': thread_buffer,
-            'last-message': 0}
-    connections[f'{username}@{host}:{client.getpeername()[0]}:{client.getpeername()[1]}'] = connection
-
-    # Create a thread to handle input from that socket
-    in_thread = threading.Thread(target=sock_input,
-            args=(args, connection, history))
-
-    # Create a thread to relay data out to the client
-    out_thread = threading.Thread(target=sock_output,
-            args=(connection, thread_buffer))
-    # Acquire lock so that we don't change the size of connections out
-    # from under an iterator
-    # Keep track of the thread and its buffer
     last_message = 0
-    print(f'config: {config}')
     if username in config['clients']:
-        if host in config['clients'][username]:
+        if host in config['clients'][username]['hosts']:
             if 'last-message' in config['clients'][username]['hosts'][host]:
                 if len(history) >= config['clients'][username]['hosts'][host]['last-message']:
                     last_message = config['clients'][username]['hosts'][host]['last-message']
+                    print(last_message)
                 else:
                     last_message = 0
             else:
@@ -201,10 +182,40 @@ def authentication_handler(args, client, config, history):
     else:
         config['clients'][username] = {'hosts': {host: {'last-message': 0}}}
 
+    # Keep track of the thread's buffer
+    thread_buffer = queue.Queue()
+
+    connection = {
+            'key': f'{username}@{host}:{client.getpeername()[0]}:{client.getpeername()[1]}',
+            'socket': client,
+            'username': username,
+            'host': host,
+            'ip': client.getpeername()[0],
+            'port': client.getpeername()[1],
+            'out_buffer': thread_buffer,
+            'last-message': last_message}
+
+    print(connection)
+
+    # Acquire lock so that we don't change the size of connections out
+    # from under an iterator
+    connections_lock.acquire()
+    connections[f'{username}@{host}:{client.getpeername()[0]}:{client.getpeername()[1]}'] = connection
+    connections_lock.release()
+
+    connection['out_buffer'].put(f'CONNECTED\n'.encode())
+
+    # Create a thread to handle input from that socket
+    in_thread = threading.Thread(target=sock_input,
+            args=(args, connection, history))
+
+    # Create a thread to relay data out to the client
+    out_thread = threading.Thread(target=sock_output,
+            args=(connection, thread_buffer))
+
     config['clients'][username]['salt'] = salt.decode('iso-8859-1')
     config['clients'][username]['password'] = hashed_password
 
-    connections_lock.release()
     # Start the producer and consumer
     in_thread.start()
     out_thread.start()
@@ -220,7 +231,7 @@ def master_queue_handler(buffer, config):
 
             # Send this client every message between the last one it saw and
             # the most recent message the server received
-            last_read_message = config['clients'][connection['username']]['hosts'][connection['host']]['last-message']
+            last_read_message = connection['last-message']
             for message in history[last_read_message:last_message]:
 
                 # If this message was sent by the current client, don't send it
@@ -228,7 +239,9 @@ def master_queue_handler(buffer, config):
                 if not (message['sender'] == connection['username']
                         and message['host'] == connection['host']):
                     connection['out_buffer'].put(
-                            "{}\n".format(message['data']).encode())
+                            "{}@{}: {}\n".format(message['sender'],
+                                message['host'],
+                                message['data']).encode())
 
             # Update last seen message for this client
             connection['last-message'] = last_message
@@ -252,18 +265,45 @@ def sock_input(args, connection, buffer):
             # queue
             else:
                 cleaned_data = data.decode('utf-8', 'replace').strip()
-                print("\033[1m{}@{}:\033[0m {}".format(connection['username'],
-                    connection['host'], cleaned_data))
-                message_package = {'sender': connection['username'],
-                        'host': connection['host'],
-                        'data': cleaned_data}
-                buffer.append(message_package)
 
-                # Assume that the client has echo checked it in the file to avoid
-                # the eventuality of a message_id being duplicated in the future
-                # causing collisions and messages disappearing
-                with open(args.history, 'a') as history_file:
-                    history_file.write("{}\n".format(json.dumps(message_package)))
+                # Return the list of all active nodes
+                if cleaned_data.find('Q NODE') == 0:
+                    active_nodes = {'clients': {}}
+
+                    # Run through all connections and stack them into a json
+                    for active_connection in connections.values():
+                        if active_connection['username'] not in active_nodes['clients']:
+                            active_nodes['clients'][active_connection['username']] = []
+
+                        active_nodes['clients'][active_connection['username']].append(active_connection['host'])
+
+                    # Send results back to the querying client
+                    connection['out_buffer'].put(
+                            f'A NODE\n{json.dumps(active_nodes)}\n'.encode())
+
+                elif cleaned_data.find('Q HOST') == 0:
+                    pass
+                elif cleaned_data.find('Q HIST') == 0:
+                    try:
+                        num_messages_str = cleaned_data[len('Q HIST'):]
+                        num_messages = int(cleaned_data[len('Q HIST'):])
+                        connection['out_buffer'].put( f'A HIST\n{history[len(history) - num_messages:]}\n'.encode())
+                    except TypeError:
+                        connection['out_buffer'].put(
+                                f'A HIST\nERROR: {num_messages_str} not valid number\n'.encode())
+                else:
+                    print("\033[1m{}@{}:\033[0m {}".format(connection['username'],
+                        connection['host'], cleaned_data))
+                    message_package = {'sender': connection['username'],
+                            'host': connection['host'],
+                            'data': cleaned_data}
+                    buffer.append(message_package)
+
+                    # Assume that the client has echo checked it in the file to avoid
+                    # the eventuality of a message_id being duplicated in the future
+                    # causing collisions and messages disappearing
+                    with open(args.history, 'a') as history_file:
+                        history_file.write("{}\n".format(json.dumps(message_package)))
         except (ConnectionResetError, OSError):
             connected = False
     # Remove this socket from the list of connections, as it's no longer
