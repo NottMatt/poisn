@@ -80,23 +80,26 @@ that contain context-specific information.
 
 <br>
 
-## Dependencies
+## Clients and Dependencies
+<br>
 
-<img title="a title" alt="miasma" src="/img/miasma_logo.png">
+<img title="a title" alt="miasma" width="100" src="img/miasma_logo.png">
 
-### Miasma Client:
+### Miasma Client
 * Tkinter
 * Contextlib
-* 
-<img title="a title" alt="dartfrog" src="/img/dartfrog_logo.png">
+
+<br>
+<img title="a title" alt="dartfrog" width="100" src="img/dartfrog_logo.png">
 
 ### DartFrog Client
-* 
 
-<img title="a title" alt="nightshade" src="/img/nightshade_logo.png">
+
+<br>
+<img title="a title" alt="nightshade" width="100" src="img/nightshade_logo.png">
 
 ### Nightshade Client
-* 
+
 
 <br>
 
