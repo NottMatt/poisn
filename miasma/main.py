@@ -14,6 +14,7 @@ from io import StringIO
 from contextlib import redirect_stdout
 import subprocess
 import os
+import json
 
 
 def main():
@@ -35,33 +36,30 @@ def main():
         if code_active:
             execute_py()
         flag = True
-        if 'node' in message:
-            node_update = True
     root.after(1, main)
 
     # inbuffer
     if not inbuffer.empty():
         tcp_message = inbuffer.get()
         data = tcp_message
-        last_f = open('last', 'w')
-        last_f.write(data)
-        last_f.close()
-        if code_active:
-            execute_py()
-        # header = ''
-        # data = ''
-        # if len(tcp_message) > 0:
-        #     content = tcp_message.split('\n', 1)
-        #     if len(content) > 1:
-        #         header = content[0]
-        #         data = content[1]
 
-        # data processing
+        if data.split('\n')[0].split(' ')[1] == 'NODE':
+            node_update = True
+            for n in data.split('\n')[1:]:
+                node_f = open('nodes', 'a')
+                node_f.write(n)
+                node_f.close()
+        else:
+            last_f = open('last', 'w')
+            last_f.write(data)
+            last_f.close()
+            if code_active:
+                execute_py()
 
-        flag=True
-        buf_in = open('buffer', 'a')
-        buf_in.write(data)
-        buf_in.close()
+            flag=True
+            buf_in = open('buffer', 'a')
+            buf_in.write(data)
+            buf_in.close()
 
 
     # Node update
@@ -76,8 +74,8 @@ def main():
                 newnode = newnode[0:20]
             nodes_arr = nodes_arr + [newnode]
         for i in range(len(nodes_arr)):
-            node_f = Frame(roster, bg='#333333', width=roster.winfo_width(), height=10)
-            node_l = Label(node_f, text=nodes_arr[i], bg='#333333', fg='#888888', justify=LEFT, width=22)
+            node_f = Frame(roster, bg=LIGHT_COLOR, width=roster.winfo_width(), height=10)
+            node_l = Label(node_f, text=nodes_arr[i], bg=LIGHT_COLOR, fg=FONT_COLOR, justify=LEFT, width=22)
             node_l.pack(anchor='ne')
             node_f.pack(side=TOP)
             roster_nodes.append(node_f)
@@ -90,6 +88,7 @@ def main():
         b_field.delete(1.0, 'end')
         b_field.insert('end', buf.read())
         b_field.config(state=DISABLED)
+        b_field.yview(END)
         flag = False
     buf.close()
 
@@ -103,7 +102,7 @@ def execute_py():
         outbuffer.put(output_str)
         inbuffer.put(output_str)
 
-    a_button.config(bg='#333333')
+    a_button.config(bg=LIGHT_COLOR)
     globals()['code_active'] = False
     print(output_str)
 
@@ -133,12 +132,20 @@ def activate():
     a_file = open('code_file.py', 'w')
     a_file.write("#!/bin/python3\n" + a_code)
     a_file.close()
-    a_button.config(bg='#89402e')
+    a_button.config(bg=WARN_COLOR)
     globals()['code_active'] = True
 
 
 try:
     # print('')
+    th = open('themes/light/theme.json', 'r')
+    theme = json.load(th)
+    TERM_COLOR = theme['colors']['terminal_pane']
+    EDIT_COLOR = theme['colors']['editor_pane']
+    DARK_COLOR = theme['colors']['dark_accent']
+    LIGHT_COLOR = theme['colors']['light_accent']
+    FONT_COLOR = theme['colors']['font']
+    WARN_COLOR = theme['colors']['warn']
     username = 'nottmatt'
 
     # TCP connection
@@ -170,7 +177,7 @@ finally:
     root.iconbitmap('./miasma_logo.ico')
 
     root.wm_title('Miasma - Poisn Client')
-    root['bg'] = '#1F1F1F'
+    root['bg'] = TERM_COLOR
     root.geometry('{w}x{h}+50+50'.format(w=WIDTH + ROST_WIDTH, h=HEIGHT))
     Grid.rowconfigure(root, 0, weight=1)
     Grid.columnconfigure(root, 0, weight=20)
@@ -179,52 +186,52 @@ finally:
 
     # EDITOR window
     editor = Frame(root)
-    editor['bg'] = '#242424'
+    editor['bg'] = DARK_COLOR
     editor.grid(row=0, column=0, sticky="NSEW")
 
     # FEED window
     feed = Frame(root)
-    feed['bg'] = '#1F1F1F'
+    feed['bg'] = TERM_COLOR
     feed.grid(row=0, column=1, sticky="NSEW")
 
     # ROSTER window
     roster = Frame(root, width=ROST_WIDTH)
-    roster['bg'] = '#333333'
+    roster['bg'] = LIGHT_COLOR
     roster.grid(row=0, column=2, sticky="NSE")
 
     # EDITOR components
     # activate button
-    a_frame1 = Frame(editor, bg='#242424', height=15, width=0)
-    a_frame2 = Frame(editor, bg='#242424', height=15, width=0)
-    a_button = Button(editor, text='ACTIVATE  >>', bd=0, bg='#333333', fg='#888888',
-                      activebackground='#404040', height=2, width=20, command=activate)
+    a_frame1 = Frame(editor, bg=DARK_COLOR, height=15, width=0)
+    a_frame2 = Frame(editor, bg=DARK_COLOR, height=15, width=0)
+    a_button = Button(editor, text='ACTIVATE  >>', bd=0, bg=LIGHT_COLOR, fg=FONT_COLOR,
+                      activebackground=WARN_COLOR, height=2, width=20, command=activate)
     a_frame1.pack(side=BOTTOM, anchor=SE)
     a_button.pack(side=BOTTOM, anchor=SE)
     a_frame2.pack(side=BOTTOM, anchor=SE)
 
     # text field
-    t_frame = Frame(editor, bg='#272727')
+    t_frame = Frame(editor, bg=EDIT_COLOR)
     t_frame.pack(side=BOTTOM, fill=BOTH, expand=True)
     Grid.rowconfigure(t_frame, 0, weight=1)
     Grid.columnconfigure(t_frame, 0, weight=1)
     Grid.columnconfigure(t_frame, 1, weight=100)
     t_field = Text(t_frame, width=t_frame.winfo_width(), height=t_frame.winfo_height(),
-                   bg='#272727', fg='#888888', bd=0)
+                   bg=EDIT_COLOR, fg=FONT_COLOR, bd=0)
     t_field.grid(row=0, column=1, sticky="NSEW")
     sb = Scrollbar(t_frame)
     sb.grid(row=0, column=0, sticky="NSW")
     t_field.config(yscrollcommand=sb.set)
     sb.config(command=t_field.yview)
 
-    a_frame3 = Frame(editor, bg='#242424', height=15, width=0)
+    a_frame3 = Frame(editor, bg=DARK_COLOR, height=15, width=0)
     a_frame3.pack(side=BOTTOM, anchor=SE)
 
     # FEED Components
     # input bar
-    i_frame1 = Frame(feed, bg='#1F1F1F', height=15, width=0)
-    i_frame2 = Frame(feed, bg='#1F1F1F', height=15, width=0)
+    i_frame1 = Frame(feed, bg=TERM_COLOR, height=15, width=0)
+    i_frame2 = Frame(feed, bg=TERM_COLOR, height=15, width=0)
 
-    inp_bar = Frame(feed, height = 1, width=feed.winfo_width(), bg='#333333')
+    inp_bar = Frame(feed, height = 1, width=feed.winfo_width(), bg=LIGHT_COLOR)
     i_frame1.pack(side=BOTTOM, anchor=SW)
     inp_bar.pack(side=BOTTOM, anchor=SE, fill=X, padx=10)
 
@@ -232,18 +239,18 @@ finally:
     Grid.columnconfigure(inp_bar, 0, weight=1)
 
     inp_field = Text(inp_bar, width=inp_bar.winfo_width(), height=1,
-                     bg='#333333', fg='#888888', bd=0)
+                     bg=LIGHT_COLOR, fg=FONT_COLOR, bd=0)
     inp_field.pack(fill=BOTH, padx=10)
 
     # text buffer
-    b_frame = Frame(feed, bg='#1F1F1F', height=feed.winfo_height(), width=feed.winfo_width())
+    b_frame = Frame(feed, bg=TERM_COLOR, height=feed.winfo_height(), width=feed.winfo_width())
     b_frame.pack(side=TOP, fill=BOTH, expand=True)
     Grid.rowconfigure(b_frame, 0, weight=1)
     Grid.columnconfigure(b_frame, 0, weight=1)
 
     b_field = Text(b_frame, state=DISABLED,
                    width=b_frame.winfo_width(), height=b_frame.winfo_height(),
-                   bg='#1F1F1F', fg='#888888', bd=0)
+                   bg=TERM_COLOR, fg=FONT_COLOR, bd=0)
 
     b_field.grid(row=0, column=0, sticky="NSEW")
     sb_f = Scrollbar(b_frame)
@@ -251,8 +258,8 @@ finally:
     b_field.config(yscrollcommand=sb_f.set)
 
     # Roster components
-    node_f_b = Frame(roster, bg='#333333', width=roster.winfo_width(), height=10)
-    node_l_b = Label(node_f_b, text='Active Nodes', bg='#333333', fg='#666666', justify=LEFT, width=22)
+    node_f_b = Frame(roster, bg=LIGHT_COLOR, width=roster.winfo_width(), height=10)
+    node_l_b = Label(node_f_b, text='Active Nodes', bg=LIGHT_COLOR, fg=FONT_COLOR, justify=LEFT, width=22)
     node_l_b.pack(anchor='ne')
     node_f_b.pack(side=TOP, anchor='ne')
     roster_nodes = []

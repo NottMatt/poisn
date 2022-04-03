@@ -1,0 +1,10 @@
+{
+    "colors" : {
+        "terminal_pane":"#FFFFFF",
+        "editor_pane":"#D3D3D3",
+        "dark_accent":"#9E9E9E",
+        "light_accent":"#E0E0E0",
+        "font":"#1F1F1F",
+        "warn": "#FC826A"
+    }
+}
