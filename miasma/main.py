@@ -10,7 +10,10 @@ from tkinter import *
 from socket import *
 import queue
 import threading
+from io import StringIO
+from contextlib import redirect_stdout
 import subprocess
+import os
 
 
 def main():
@@ -26,6 +29,11 @@ def main():
         buf = open('buffer', 'a')
         buf.write(message)
         buf.close()
+        last_f = open('last', 'w')
+        last_f.write(message)
+        last_f.close()
+        if code_active:
+            execute_py()
         flag = True
         if 'node' in message:
             node_update = True
@@ -38,7 +46,8 @@ def main():
         last_f = open('last', 'w')
         last_f.write(data)
         last_f.close()
-        execute_py()
+        if code_active:
+            execute_py()
         # header = ''
         # data = ''
         # if len(tcp_message) > 0:
@@ -53,8 +62,6 @@ def main():
         buf_in = open('buffer', 'a')
         buf_in.write(data)
         buf_in.close()
-
-
 
 
     # Node update
@@ -86,18 +93,19 @@ def main():
         flag = False
     buf.close()
 
+
 def execute_py():
-    py = subprocess.Popen("./code_file.py", stdout=subprocess.PIPE, shell=True)
-    (output, err) = py.communicate()
-    if (len(output) > 0):
-        outbuffer.put(output)
-        b_field.config(state=NORMAL)
-        b_field.delete(1.0, 'end')
-        b_field.insert('end', output)
-        b_field.config(state=DISABLED)
+    f = StringIO()
+    with redirect_stdout(f):
+            exec(open('code_file.py').read())
+    output_str = f.getvalue()
+    if len(output_str) > 0:
+        outbuffer.put(output_str)
+        inbuffer.put(output_str)
 
     a_button.config(bg='#333333')
     globals()['code_active'] = False
+    print(output_str)
 
 
 def socket_in(in_buffer, is_connected):
